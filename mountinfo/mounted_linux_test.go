@@ -280,6 +280,7 @@ func tryOpenat2() error {
 
 func TestMountedBy(t *testing.T) {
 	checked := false
+	openat2Supported := tryOpenat2() == nil
 
 	// List of individual implementations to check.
 	toCheck := []func(string) (bool, error){mountedByMountinfo, mountedByStat}
@@ -311,6 +312,34 @@ func TestMountedBy(t *testing.T) {
 				// Check false is returned in error case.
 				if mounted != false {
 					t.Errorf("Mounted: expected false on error, got %v", mounted)
+				}
+			}
+
+			// Check the public MountedFast() function as a whole.
+			mounted, sure, err := MountedFast(m)
+			if err == nil {
+				if !openat2Supported && tc.isBind {
+					if mounted == true {
+						t.Errorf("MountFast: expected mounted as false, got %v", mounted)
+					}
+					if sure == true {
+						t.Errorf("MountedFast: expected sure as false, got %v", sure)
+					}
+				} else {
+					if sure != true {
+						t.Errorf("MountFast: expected sure to be always true, got %v", sure)
+					}
+					if mounted != exp {
+						t.Errorf("MountFast: expected mounted as %v, got %v", exp, mounted)
+					}
+				}
+			} else {
+				// Check false is returned in error case.
+				if mounted != false {
+					t.Errorf("Mounted: expected mounted as false on error, got %v", mounted)
+				}
+				if sure != false {
+					t.Errorf("Mounted: expected sure as false on error, got %v", sure)
 				}
 			}
 
