@@ -7,6 +7,50 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// MountedFast is a method of detecting mount points without reading
+// mountinfo from procfs. A mount-point check is guaranteed to be a
+// mount-point or not only when sure is true. When sure is false, the
+// caller needs to check for other methods (eg: parse /proc/mounts)
+// to successfully determine if it is a mount-point.
+func MountedFast(path string) (mounted, sure bool, err error) {
+	// root is always mounted
+	if path == string(os.PathSeparator) {
+		return true, true, nil
+	}
+
+	path, err = normalizePath(path)
+	if err != nil {
+		return false, false, err
+	}
+
+	return mountedFast(path)
+}
+
+// mountedFast combines mountedByOpenAt2 and mountedByStat
+// A mount-point check is guaranteed to be a mount-point or not only
+// when sure is true. When sure is false, the caller needs to check
+// for other methods (eg: parse /proc/mounts) to successfully
+// determine if it is a mount-point.
+func mountedFast(normalizedPath string) (mounted, sure bool, err error) {
+
+	// Try a fast path, using openat2() with RESOLVE_NO_XDEV.
+	mounted, err = mountedByOpenat2(normalizedPath)
+	if mounted && err == nil {
+		return true, true, nil
+	}
+
+	// Another fast path: compare st.st_dev fields.
+	mounted, err = mountedByStat(normalizedPath)
+	// This does not work for bind mounts, so false negative
+	// is possible, therefore only trust if return is true.
+	if mounted && err == nil {
+		return mounted, true, nil
+	}
+
+	// NB: not sure
+	return false, false, err
+}
+
 // mountedByOpenat2 is a method of detecting a mount that works for all kinds
 // of mounts (incl. bind mounts), but requires a recent (v5.6+) linux kernel.
 func mountedByOpenat2(path string) (bool, error) {
