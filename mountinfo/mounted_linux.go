@@ -4,8 +4,52 @@ import (
 	"os"
 	"path/filepath"
 
+	"errors"
+
 	"golang.org/x/sys/unix"
 )
+
+var ErrMountPointNotSure = errors.New("unable to determine mount-point")
+
+// MountedFast is a method of detecting mount points without reading
+// mountinfo from procfs. When `ErrMountPointNotSure` is
+// returned as an error, then caller needs to check for other methods
+// like using Mounted(path).
+func MountedFast(path string) (mounted bool, err error) {
+	// root is always mounted
+	if path == string(os.PathSeparator) {
+		return true, nil
+	}
+
+	path, err = normalizePath(path)
+	if err != nil {
+		return false, err
+	}
+
+	return mountedFast(path)
+}
+
+// mountedFast combines mountedByOpenAt2 and mountedByStat
+// When sure is false, the caller needs to check
+// for other methods (eg: parse /proc/mounts) to successfully
+// determine if it is a mount-point.
+func mountedFast(normalizedPath string) (mounted bool, err error) {
+
+	// Try a fast path, using openat2() with RESOLVE_NO_XDEV.
+	mounted, err = mountedByOpenat2(normalizedPath)
+	if err == nil {
+		return mounted, nil
+	}
+
+	// Another fast path: compare st.st_dev fields.
+	mounted, err = mountedByStat(normalizedPath)
+	// This does not work for bind mounts, so false negative
+	// is possible, therefore only trust if return is true.
+	if err != nil {
+		return mounted, err
+	}
+	return mounted, nil
+}
 
 // mountedByOpenat2 is a method of detecting a mount that works for all kinds
 // of mounts (incl. bind mounts), but requires a recent (v5.6+) linux kernel.
@@ -39,17 +83,11 @@ func mounted(path string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	// Try a fast path, using openat2() with RESOLVE_NO_XDEV.
-	mounted, err := mountedByOpenat2(path)
+
+	// Try all fast paths.
+	mounted, err := mountedFast(path)
 	if err == nil {
-		return mounted, nil
-	}
-	// Another fast path: compare st.st_dev fields.
-	mounted, err = mountedByStat(path)
-	// This does not work for bind mounts, so false negative
-	// is possible, therefore only trust if return is true.
-	if mounted && err == nil {
-		return mounted, nil
+		return mounted, err
 	}
 
 	// Fallback to parsing mountinfo

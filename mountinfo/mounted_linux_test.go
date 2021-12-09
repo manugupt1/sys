@@ -2,13 +2,13 @@ package mountinfo
 
 import (
 	"errors"
-	"net"
+	"fmt"
 	"os"
-	"path/filepath"
 	"reflect"
 	"runtime"
-	"strings"
 	"testing"
+	"path/filepath"
+	"net"
 
 	"golang.org/x/sys/unix"
 )
@@ -39,6 +39,8 @@ var testMounts = []struct {
 	isNotExist bool
 	isMount    bool
 	isBind     bool
+	// only needed for older kernels (less than 5.6).
+	isSure bool
 	// prepare returns a path that needs to be checked, and the error, if any.
 	//
 	// It is responsible for cleanup (by using t.Cleanup).
@@ -52,6 +54,7 @@ var testMounts = []struct {
 	{
 		desc:       "non-existent path",
 		isNotExist: true,
+		isSure:     true,
 		prepare: func(t *testing.T) (string, error) {
 			return "/non/existent/path", nil
 		},
@@ -66,6 +69,7 @@ var testMounts = []struct {
 	{
 		desc:    "tmpfs mount",
 		isMount: true,
+		isSure:  true,
 		prepare: func(t *testing.T) (mnt string, err error) {
 			mnt = t.TempDir()
 			err = tMount(t, "tmpfs", mnt, "tmpfs", 0, "")
@@ -75,6 +79,7 @@ var testMounts = []struct {
 	{
 		desc:    "tmpfs mount ending with a slash",
 		isMount: true,
+		isSure:  true,
 		prepare: func(t *testing.T) (mnt string, err error) {
 			mnt = t.TempDir() + "/"
 			err = tMount(t, "tmpfs", mnt, "tmpfs", 0, "")
@@ -84,6 +89,7 @@ var testMounts = []struct {
 	{
 		desc:       "broken symlink",
 		isNotExist: true,
+		isSure:     true,
 		prepare: func(t *testing.T) (link string, err error) {
 			dir := t.TempDir()
 			link = filepath.Join(dir, "broken-symlink")
@@ -110,6 +116,7 @@ var testMounts = []struct {
 	{
 		desc:    "symlink to mounted directory",
 		isMount: true,
+		isSure:  true,
 		prepare: func(t *testing.T) (link string, err error) {
 			tmp := t.TempDir()
 
@@ -280,9 +287,10 @@ func tryOpenat2() error {
 
 func TestMountedBy(t *testing.T) {
 	checked := false
+	openat2Supported := tryOpenat2() == nil
 
 	// List of individual implementations to check.
-	toCheck := []func(string) (bool, error){mountedByMountinfo, mountedByStat}
+	toCheck := []func(string) (bool, error){mountedByStat}
 	if tryOpenat2() == nil {
 		toCheck = append(toCheck, mountedByOpenat2)
 	}
@@ -301,7 +309,7 @@ func TestMountedBy(t *testing.T) {
 			mounted, err := Mounted(m)
 			if err == nil {
 				if mounted != exp {
-					t.Errorf("Mounted: expected %v, got %v", exp, mounted)
+					t.Errorf("Mounted: expected %v, got %v, m:%s", exp, mounted, m)
 				}
 			} else {
 				// Got an error; is it expected?
@@ -313,6 +321,28 @@ func TestMountedBy(t *testing.T) {
 					t.Errorf("Mounted: expected false on error, got %v", mounted)
 				}
 			}
+
+			// Check the public MountedFast() function as a whole.
+			mounted, err = MountedFast(m)
+			if err == nil {
+				if mounted != exp {
+					t.Errorf("Mounted: expected %v, got %v", exp, mounted)
+				}
+			} else {
+				// Check false is returned in error case.
+				if mounted != false {
+					t.Errorf("Mounted: expected false on error, got %v", mounted)
+				}
+				if !openat2Supported {
+					if !tc.isSure {
+						if err == nil || (err != nil && !errors.Is(err, ErrMountPointNotSure)) {
+							t.Errorf("MountFast: expected err as ErrMountPointNotSure, got %v", err)
+						}
+					}
+				}
+			}
+
+			fmt.Println("finished mount point fast")
 
 			// Check individual mountedBy* implementations.
 
@@ -331,16 +361,18 @@ func TestMountedBy(t *testing.T) {
 
 				mounted, err = fn(m)
 				if err != nil {
-					t.Errorf("%s: %v", name, err)
 					// Check false is returned in error case.
 					if mounted != false {
 						t.Errorf("%s: expected false on error, got %v", name, mounted)
 					}
-				} else if mounted != exp {
-					if tc.isBind && strings.HasSuffix(name, "mountedByStat") {
-						// mountedByStat can not detect bind mounts.
-					} else {
-						t.Errorf("%s: expected %v, got %v", name, exp, mounted)
+				} else {
+					if mounted != exp {
+						t.Errorf("%s: expected true, got %v", name, mounted)
+					}
+				}
+				if !openat2Supported && !tc.isSure {
+					if err == nil || (err != nil && !errors.Is(err, ErrMountPointNotSure)) {
+						t.Errorf("MountFast: expected err as ErrMountPointNotSure, got %v", err)
 					}
 				}
 				checked = true

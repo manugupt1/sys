@@ -12,6 +12,8 @@ import (
 )
 
 func mountedByStat(path string) (bool, error) {
+
+	fmt.Println("[hello]path is ", path)
 	var st unix.Stat_t
 
 	if err := unix.Lstat(path, &st); err != nil {
@@ -27,8 +29,10 @@ func mountedByStat(path string) (bool, error) {
 		// so definitely a mount point.
 		return true, nil
 	}
+
+	fmt.Println("[end]I am here", path)
 	// NB: this does not detect bind mounts on Linux.
-	return false, nil
+	return false, &os.PathError{Op: "stat", Path: path, Err: ErrMountPointNotSure}
 }
 
 func normalizePath(path string) (realPath string, err error) {
