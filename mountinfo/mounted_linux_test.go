@@ -333,9 +333,6 @@ func TestMountedBy(t *testing.T) {
 					if !tc.isBind && mounted != exp {
 						t.Errorf("MountFast: expected mounted as %v, got %v", exp, mounted)
 					}
-					if sure != tc.isSure {
-						t.Errorf("MountFast: expected sure as %v, got %v", tc.isSure, sure)
-					}
 				} else {
 					if sure != true {
 						t.Errorf("MountFast: expected sure as true, got %v", sure)
@@ -347,11 +344,33 @@ func TestMountedBy(t *testing.T) {
 			} else {
 				// Check false is returned in error case.
 				if mounted != false {
-					t.Errorf("Mounted: expected mounted as false on error, got %v", mounted)
+					t.Errorf("MountFast: expected mounted as false on error, got %v", mounted)
 				}
-				if sure != false {
-					t.Errorf("Mounted: expected sure as false on error, got %v", sure)
+			}
+
+			if !openat2Supported {
+				if tc.isMount {
+					if tc.isBind && sure {
+						t.Errorf("MountFast: expected sure to be false, got true")
+					} 
+					if !tc.isBind && !sure {
+						t.Errorf("MountFast: expected sure to be true, got false")
+					}
+				} else {
+					// if it is not a mount-point, we are never sure on older kernels.
+					if sure {
+						t.Errorf("MountFast: expected sure to be false, got true")
+					}
 				}
+			} else {
+				if tc.isMount && sure == false {
+					t.Errorf("MountFast: expected sure to be true, got false")
+				}
+			}
+			
+			// for any error, regardless of kernel version, sure is false.
+			if err != nil && sure == true {
+				t.Errorf("MountFast: expected sure to be false, got true")
 			}
 
 			// Check individual mountedBy* implementations.
