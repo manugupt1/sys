@@ -39,8 +39,6 @@ var testMounts = []struct {
 	isNotExist bool
 	isMount    bool
 	isBind     bool
-	// only needed for older kernels (less than 5.6).
-	isSure bool
 	// prepare returns a path that needs to be checked, and the error, if any.
 	//
 	// It is responsible for cleanup (by using t.Cleanup).
@@ -54,7 +52,6 @@ var testMounts = []struct {
 	{
 		desc:       "non-existent path",
 		isNotExist: true,
-		isSure:     true,
 		prepare: func(t *testing.T) (string, error) {
 			return "/non/existent/path", nil
 		},
@@ -69,7 +66,6 @@ var testMounts = []struct {
 	{
 		desc:    "tmpfs mount",
 		isMount: true,
-		isSure:  true,
 		prepare: func(t *testing.T) (mnt string, err error) {
 			mnt = t.TempDir()
 			err = tMount(t, "tmpfs", mnt, "tmpfs", 0, "")
@@ -79,7 +75,6 @@ var testMounts = []struct {
 	{
 		desc:    "tmpfs mount ending with a slash",
 		isMount: true,
-		isSure:  true,
 		prepare: func(t *testing.T) (mnt string, err error) {
 			mnt = t.TempDir() + "/"
 			err = tMount(t, "tmpfs", mnt, "tmpfs", 0, "")
@@ -89,7 +84,6 @@ var testMounts = []struct {
 	{
 		desc:       "broken symlink",
 		isNotExist: true,
-		isSure:     true,
 		prepare: func(t *testing.T) (link string, err error) {
 			dir := t.TempDir()
 			link = filepath.Join(dir, "broken-symlink")
@@ -116,7 +110,6 @@ var testMounts = []struct {
 	{
 		desc:    "symlink to mounted directory",
 		isMount: true,
-		isSure:  true,
 		prepare: func(t *testing.T) (link string, err error) {
 			tmp := t.TempDir()
 
@@ -288,6 +281,7 @@ func tryOpenat2() error {
 func TestMountedBy(t *testing.T) {
 	checked := false
 	openat2Supported := tryOpenat2() == nil
+	count := 0
 
 	// List of individual implementations to check.
 	toCheck := []func(string) (bool, error){mountedByMountinfo, mountedByStat}
@@ -324,53 +318,41 @@ func TestMountedBy(t *testing.T) {
 
 			// Check the public MountedFast() function as a whole.
 			mounted, sure, err := MountedFast(m)
-			if err == nil {
-				if !openat2Supported {
-					// stat does not detect bind-mounts correctly.
-					if tc.isBind && mounted == true {
-						t.Errorf("MountFast: expected mounted as false for bind-mounts, got %v", mounted)
-					}
-					if !tc.isBind && mounted != exp {
-						t.Errorf("MountFast: expected mounted as %v, got %v", exp, mounted)
-					}
-				} else {
+
+			// for any error, regardless of kernel version, sure and mounted is false.
+			if err != nil {
+				count++
+				if sure == true {
+					t.Errorf("MountFast: expected sure to be false, got true")
+				}
+				if mounted != false {
+					t.Errorf("MountFast: expected mounted as false on error, got %v", mounted)
+				}
+			} else {
+				if openat2Supported {
+					count++
 					if sure != true {
 						t.Errorf("MountFast: expected sure as true, got %v", sure)
 					}
 					if mounted != exp {
 						t.Errorf("MountFast: expected mounted as %v, got %v", exp, mounted)
 					}
-				}
-			} else {
-				// Check false is returned in error case.
-				if mounted != false {
-					t.Errorf("MountFast: expected mounted as false on error, got %v", mounted)
-				}
-			}
-
-			if !openat2Supported {
-				if tc.isMount {
-					if tc.isBind && sure {
-						t.Errorf("MountFast: expected sure to be false, got true")
-					} 
-					if !tc.isBind && !sure {
-						t.Errorf("MountFast: expected sure to be true, got false")
-					}
 				} else {
-					// if it is not a mount-point, we are never sure on older kernels.
-					if sure {
-						t.Errorf("MountFast: expected sure to be false, got true")
+					if tc.isBind {
+						count++
+						if sure == true {
+							t.Errorf("MountFast: expected sure to be false, got true")
+						}
+						if mounted == false {
+							t.Errorf("MountFast: expected mounted to be false, got true")
+						}
+					} else {
+						count++
+						if mounted != exp {
+							t.Errorf("MountFast: expected mounted as %v, got %v", exp, mounted)
+						}
 					}
 				}
-			} else {
-				if tc.isMount && sure == false {
-					t.Errorf("MountFast: expected sure to be true, got false")
-				}
-			}
-			
-			// for any error, regardless of kernel version, sure is false.
-			if err != nil && sure == true {
-				t.Errorf("MountFast: expected sure to be false, got true")
 			}
 
 			// Check individual mountedBy* implementations.
@@ -410,6 +392,7 @@ func TestMountedBy(t *testing.T) {
 	if !checked {
 		t.Skip("no mounts to check")
 	}
+	t.Logf("count is %d", count)
 }
 
 func TestMountedByOpenat2VsMountinfo(t *testing.T) {
